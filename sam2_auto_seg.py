@@ -98,6 +98,19 @@ def save_masked_image(image: Image.Image, mask: torch.Tensor, bbox: tuple[int, i
     if right > left and lower > upper:
         masked_image = masked_image.crop((left, upper, right, lower))
     masked_image.save(f"masked_image_{index}.png")
+
+def crop_image(image: Image.Image, bbox: tuple[int, int, int, int]) -> Optional[Image.Image]:
+    # Convert bbox (x, y, height, width) -> PIL box (left, upper, right, lower)
+    base = image if image.mode == "RGBA" else image.convert("RGBA")
+    img = base.copy()
+    x, y, height, width = bbox
+    left = int(max(0, x))
+    upper = int(max(0, y))
+    right = int(min(img.width, left + int(width)))
+    lower = int(min(img.height, upper + int(height)))
+    if right > left and lower > upper:
+        return img.crop((left, upper, right, lower))
+    return None
     
 def get_bbox_from_mask(mask: torch.Tensor) -> tuple[int, int, int, int]:
     """

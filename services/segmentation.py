@@ -1,6 +1,45 @@
 import os
 import fal_client
 from fastapi import HTTPException
+from transformers import pipeline
+from PIL import Image
+import torch
+import numpy as np
+
+def get_bbox_from_mask(mask: torch.Tensor) -> tuple[int, int, int, int]:
+    """
+    Compute the tight bounding box around white (non-zero) pixels in the mask.
+    Returns (x, y, height, width) in pixel coordinates.
+    If the mask has no white pixels, returns (0, 0, 0, 0).
+    """
+    m = mask.detach().cpu().numpy()
+    # Squeeze singleton channel if present (e.g., 1xHxW or HxWx1)
+    if m.ndim == 3 and 1 in m.shape:
+        m = np.squeeze(m)
+    m = m.astype(np.uint8)
+    # Consider any non-zero as white
+    ys, xs = np.where(m > 0)
+    if ys.size == 0 or xs.size == 0:
+        return (0, 0, 0, 0)
+    y_min = int(ys.min())
+    y_max = int(ys.max())
+    x_min = int(xs.min())
+    x_max = int(xs.max())
+    x = x_min
+    y = y_min
+    height = y_max - y_min + 1
+    width = x_max - x_min + 1
+    return (x, y, height, width)
+
+generator = pipeline("mask-generation", model="facebook/sam2-hiera-large", device=0)
+def segment_img_local_sam2(image: Image.Image) -> tuple[list[torch.Tensor], list[tuple[int, int, int, int]]]:
+    """
+    Segments an image using SAM2 locally.
+    Returns a tuple of lists: (masks, bounding boxes) : [torch.Tensor, tuple[int, int, int, int]]
+    
+    """
+    outputs = generator(image, points_per_batch=64)
+    return (outputs["masks"], [get_bbox_from_mask(mask) for mask in outputs["masks"]])
 
 def segment_image(image_url: str):
     """

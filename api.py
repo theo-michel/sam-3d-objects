@@ -1,5 +1,7 @@
 import shutil
 import tempfile
+import os
+import zipfile
 
 import numpy as np
 import asyncio
@@ -10,9 +12,11 @@ import uvicorn
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse
 
-from services.segmentation import segment_image, upload_image_to_fal
+from services.segmentation import segment_image, upload_image_to_fal, segment_img_local_sam2
 from services.reconstruction import reconstruct_object, get_model
 from utils import download_image
+import json
+
 
 app = FastAPI(title="SAM 3D Objects API")
 
@@ -48,6 +52,37 @@ def resize_image_if_needed(image_path: str, max_size: int = 1024) -> str:
     except Exception as e:
         print(f"Error resizing image: {e}")
     return image_path
+
+
+def apply_transformations(
+    input_path: str, 
+    output_path: str, 
+    rotation: np.ndarray, # shape(1, 4)
+    translation: np.ndarray, # shape(1, 3)
+    scale: np.ndarray, # shape(1, 3)
+) -> str:
+    """
+    Applies transformations to the output PLY file, and save it back to output_path.
+    
+    """
+    pass # TODO: Implement this
+    
+def zip_files(files: list[str], zip_path: str) -> str:
+    """
+    Zips the files into a single ZIP file.
+    """
+    # Ensure parent directory exists
+    parent_dir = os.path.dirname(zip_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+    # Write with compression and safe arcnames
+    with zipfile.ZipFile(zip_path, mode='w', compression=zipfile.ZIP_DEFLATED) as zipf:
+        for file in files or []:
+            if not file or not os.path.isfile(file):
+                continue
+            arcname = os.path.basename(file)
+            zipf.write(file, arcname=arcname)
+    return zip_path
 
 @app.post("/image-to-3d")
 async def image_to_3d(
@@ -121,51 +156,75 @@ async def image_to_3d(
         #      raise HTTPException(status_code=500, detail="Failed to download mask")
             
         # mask_np = np.array(mask_pil)
-        mask_np = np.array(masks[0])
+        # mask_np = np.array(masks[0])
         
-        # Run inference
-        # Only generating PLY, so no mesh postprocess needed
-        output = await loop.run_in_executor(
-            executor,
-            reconstruct_object,
-            str(input_image_path), 
-            mask_np, 
-            42, # seed
-            False, # with_mesh_postprocess
-            False, # with_texture_baking
-        )
-        
-        # Save PLY (Gaussian Splat)
-        gs = output.get("gs")
-        rotation = output.get("rotation")
-        translation = output.get("translation")
-        scale = output.get("scale")
-        print(f"Rotation: {rotation}")
-        print(f"Translation: {translation}")
-        print(f"Scale: {scale}")
-        
-        if gs is None:
-            raise HTTPException(status_code=500, detail="Failed to generate Gaussian Splat")
-        
-        try:
-            print(f"Output all keys: {output.keys()}")
-            print(f"Output: {output}")
-            print(f"Output type: {type(output)}")
+        saved_files = []
+        transformations = []
+        for i, mask in enumerate(masks):
+            mask_np = np.array(mask)
             
-            
-        except Exception as e:
-            print(f"Error printing output keys: {e}")
+            # Run inference
+            # Only generating PLY, so no mesh postprocess needed
+            output = await loop.run_in_executor(
+                executor,
+                reconstruct_object,
+                str(input_image_path), 
+                mask_np, 
+                42, # seed
+                False, # with_mesh_postprocess
+                False, # with_texture_baking
+            )
         
-        output_filename = "reconstruction.ply"
-        output_path = temp_path / output_filename
-        gs.save_ply(str(output_path))
-
+            # Save PLY (Gaussian Splat)
+            gs = output.get("gs")
+            rotation = output.get("rotation") # shape(1, 4)
+            translation = output.get("translation") # shape(1, 3)
+            scale = output.get("scale") # shape(1, 3)
+            print(f"Rotation: {rotation}")
+            print(f"Translation: {translation}")
+            print(f"Scale: {scale}")
+            transformations.append({
+                "filename": output_filename,
+                "bbox": bboxes[i],
+                "rotation": rotation,
+                "translation": translation,
+                "scale": scale,
+            })
+            
+            if gs is None:
+                raise HTTPException(status_code=500, detail="Failed to generate Gaussian Splat")
+            
+            output_filename = f"reconstruction_{i}.ply"
+            output_path = temp_path / output_filename
+            gs.save_ply(str(output_path))
+            saved_files.append(output_path)
+            
+            # output_path_transformed = temp_path / f"transformed_{output_filename}"
+            # await loop.run_in_executor(
+            #     executor, 
+            #     apply_transformations, 
+            #     str(output_path), 
+            #     str(output_path_transformed), 
+            #     rotation, 
+            #     translation, 
+            #     scale
+            # )
+        
+        # Save as json transformations
+        transformations_path = temp_path / "transformations.json"
+        with open(str(transformations_path), "w") as f:
+            json.dump(transformations, f)
+        saved_files.append(transformations_path)
+        
+        # Zip all files including the transformations file..
+        zip_path = temp_path / "reconstruction.zip"
+        await loop.run_in_executor(executor, zip_files, saved_files, str(zip_path))
+        
         return FileResponse(
-            path=output_path,
-            filename=output_filename,
-            media_type="application/octet-stream"
+            path=zip_path,
+            filename="reconstruction.zip",
+            media_type="application/zip"
         )
-        
     except HTTPException as he:
         raise he
     except Exception as e:
