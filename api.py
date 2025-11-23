@@ -69,6 +69,8 @@ async def image_to_3d(
     # else:  # balanced
     #     stage1_steps = 50
     #     stage2_steps = 50
+    print(f"Image: {image}")
+    print(f"Image type: {type(image)}")
 
     # Create temp dir for this request
     temp_dir = tempfile.mkdtemp()
@@ -83,32 +85,43 @@ async def image_to_3d(
         with open(input_image_path, "wb") as f:
             shutil.copyfileobj(image.file, f)
             
+        pil_image = Image.open(input_image_path)
+        
+            
         # Resize image if needed (runs in thread pool)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(executor, resize_image_if_needed, str(input_image_path))
             
         # Upload to fal.ai
         image_url = await loop.run_in_executor(executor, upload_image_to_fal, str(input_image_path))
+        print(f"Image URL: {image_url}")
         
         # Run SAM2 segmentation
         segmentation_result = await loop.run_in_executor(executor, segment_image, image_url)
+        print(f"Segmentation result: {segmentation_result}")
         
-        individual_masks = segmentation_result.get("individual_masks", [])
-        if not individual_masks:
-            raise HTTPException(status_code=400, detail="No objects detected in the image")
+        masks, bboxes = await loop.run_in_executor(executor, segment_img_local_sam2, pil_image)
+        print(f"Masks: {masks}")
+        print(f"Bboxes: {bboxes}")
+        
+        # individual_masks = masks
+        # individual_masks = segmentation_result.get("individual_masks", [])
+        # if not individual_masks:
+        #     raise HTTPException(status_code=400, detail="No objects detected in the image")
             
         # Process only the first object
-        mask_info = individual_masks[0]
-        mask_url = mask_info.get("url")
-        if not mask_url:
-             raise HTTPException(status_code=500, detail="Invalid mask URL")
+        # mask_info = individual_masks[0]
+        # mask_url = mask_info.get("url")
+        # if not mask_url:
+        #      raise HTTPException(status_code=500, detail="Invalid mask URL")
             
         # Download mask
-        mask_pil = await loop.run_in_executor(executor, download_image, mask_url)
-        if mask_pil is None:
-             raise HTTPException(status_code=500, detail="Failed to download mask")
+        # mask_pil = await loop.run_in_executor(executor, download_image, mask_url)
+        # if mask_pil is None:
+        #      raise HTTPException(status_code=500, detail="Failed to download mask")
             
-        mask_np = np.array(mask_pil)
+        # mask_np = np.array(mask_pil)
+        mask_np = np.array(masks[0])
         
         # Run inference
         # Only generating PLY, so no mesh postprocess needed
@@ -124,9 +137,25 @@ async def image_to_3d(
         
         # Save PLY (Gaussian Splat)
         gs = output.get("gs")
+        rotation = output.get("rotation")
+        translation = output.get("translation")
+        scale = output.get("scale")
+        print(f"Rotation: {rotation}")
+        print(f"Translation: {translation}")
+        print(f"Scale: {scale}")
+        
         if gs is None:
             raise HTTPException(status_code=500, detail="Failed to generate Gaussian Splat")
-
+        
+        try:
+            print(f"Output all keys: {output.keys()}")
+            print(f"Output: {output}")
+            print(f"Output type: {type(output)}")
+            
+            
+        except Exception as e:
+            print(f"Error printing output keys: {e}")
+        
         output_filename = "reconstruction.ply"
         output_path = temp_path / output_filename
         gs.save_ply(str(output_path))
