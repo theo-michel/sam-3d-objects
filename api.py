@@ -186,9 +186,9 @@ async def image_to_3d(
             transformations.append({
                 "filename": output_filename,
                 "bbox": bboxes[i],
-                "rotation": rotation,
-                "translation": translation,
-                "scale": scale,
+                "rotation": rotation.detach().cpu().view(-1).tolist(),
+                "translation": translation.detach().cpu().view(-1).tolist(),
+                "scale": scale.detach().cpu().view(-1).tolist(),
             })
             
             if gs is None:

@@ -5,13 +5,8 @@ from PIL import Image
 import numpy as np
 import os
 import base64
-from openai import OpenAI
 
 
-# ==================== GPT  Connect ====================
-
-# Read API key from environment (export OPENAI_API_KEY=... before running)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def _encode_image_as_data_url(image_path: str) -> str:
     with open(image_path, "rb") as f:
@@ -20,43 +15,6 @@ def _encode_image_as_data_url(image_path: str) -> str:
     ext = os.path.splitext(image_path)[1].lower()
     mime = "image/png" if ext in (".png",) else "image/jpeg"
     return f"data:{mime};base64,{b64}"
-
-def return_completion(image_path: str) -> str:
-    """
-    Send an image + text prompt to the Responses API using a data URL (no file upload).
-    Returns the model's text answer.
-    """
-    if client is None:
-        raise RuntimeError("OpenAI client not initialized. Set OPENAI_API_KEY.")
-
-    data_url = _encode_image_as_data_url(image_path)
-    prompt = "In one word only, what is the main object in the image? Lowercase, no punctuation."
-
-    resp = client.responses.create(
-        model="gpt-4o-mini",
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            }
-        ],
-    )
-    # Prefer the convenience accessor if available
-    if hasattr(resp, "output_text"):
-        return resp.output_text.strip()
-    # Fallback: traverse the outputs to extract text
-    try:
-        for out in resp.output:
-            if getattr(out, "type", "") == "message":
-                for c in out.message.content:
-                    if getattr(c, "type", "") in ("output_text", "text"):
-                        return getattr(c, "text", "").strip()
-    except Exception:
-        pass
-    return ""
 
 # ==================== SAM2 ====================
 
@@ -149,5 +107,3 @@ if __name__ == "__main__":
         save_mask(mask, index)
         bbox = get_bbox_from_mask(mask)
         save_masked_image(image, mask, bbox, index)
-        object_inside = return_completion(f"masked_image_{index}.png")
-        print(f"Object inside:{object_inside}")
