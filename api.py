@@ -1,28 +1,75 @@
 import shutil
 import tempfile
-import zipfile
+
 import numpy as np
+import asyncio
+import concurrent.futures
 from pathlib import Path
+from PIL import Image
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse
 
 from services.segmentation import segment_image, upload_image_to_fal
-from services.reconstruction import reconstruct_object
+from services.reconstruction import reconstruct_object, get_model
 from utils import download_image
 
 app = FastAPI(title="SAM 3D Objects API")
+
+# ThreadPoolExecutor for blocking IO/CPU tasks
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+@app.on_event("startup")
+async def startup_event():
+    print("Warming up model...")
+    # Run in executor to avoid blocking startup
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(executor, get_model)
+        print("Model loaded successfully.")
+    except Exception as e:
+        print(f"Failed to load model on startup: {e}")
+
+def resize_image_if_needed(image_path: str, max_size: int = 1024) -> str:
+    """
+    Resizes image if larger than max_size. Overwrites the file.
+    Returns the path.
+    """
+    try:
+        with Image.open(image_path) as img:
+            w, h = img.size
+            if w > max_size or h > max_size:
+                # Calculate new size maintaining aspect ratio
+                ratio = min(max_size / w, max_size / h)
+                new_size = (int(w * ratio), int(h * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                img.save(image_path)
+                print(f"Resized image from {w}x{h} to {new_size}")
+    except Exception as e:
+        print(f"Error resizing image: {e}")
+    return image_path
 
 @app.post("/image-to-3d")
 async def image_to_3d(
     background_tasks: BackgroundTasks,
     image: UploadFile = File(...),
-    max_objects: int = Query(5, description="Maximum number of objects to reconstruct to avoid timeouts"),
+    # quality: str = Query("balanced", description="Quality level: 'fast' (fewer steps), 'balanced' (default), 'high' (more steps)"),
 ):
     """
-    Takes an image, segments it using SAM2 (via fal.ai), and reconstructs 3D meshes for detected objects.
-    Returns a ZIP file containing the 3D meshes (GLB format).
+    Takes an image, segments it using SAM2 (via fal.ai), and reconstructs a 3D model for the first detected object.
+    Returns a PLY file (Gaussian Splat).
     """
+    # # Determine inference steps based on quality
+    # if quality == "fast":
+    #     stage1_steps = 30
+    #     stage2_steps = 30
+    # elif quality == "high":
+    #     stage1_steps = 75
+    #     stage2_steps = 75
+    # else:  # balanced
+    #     stage1_steps = 50
+    #     stage2_steps = 50
+
     # Create temp dir for this request
     temp_dir = tempfile.mkdtemp()
     temp_path = Path(temp_dir)
@@ -36,70 +83,58 @@ async def image_to_3d(
         with open(input_image_path, "wb") as f:
             shutil.copyfileobj(image.file, f)
             
+        # Resize image if needed (runs in thread pool)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(executor, resize_image_if_needed, str(input_image_path))
+            
         # Upload to fal.ai
-        image_url = upload_image_to_fal(str(input_image_path))
+        image_url = await loop.run_in_executor(executor, upload_image_to_fal, str(input_image_path))
         
         # Run SAM2 segmentation
-        segmentation_result = segment_image(image_url)
+        segmentation_result = await loop.run_in_executor(executor, segment_image, image_url)
         
         individual_masks = segmentation_result.get("individual_masks", [])
         if not individual_masks:
             raise HTTPException(status_code=400, detail="No objects detected in the image")
             
-        # Limit number of objects
-        masks_to_process = individual_masks[:max_objects]
-        print(f"Processing {len(masks_to_process)} objects (limit: {max_objects})...")
-        
-        results_dir = temp_path / "results"
-        results_dir.mkdir()
-        
-        for i, mask_info in enumerate(masks_to_process):
-            mask_url = mask_info.get("url")
-            if not mask_url:
-                continue
-                
-            print(f"Processing object {i+1}/{len(masks_to_process)}...")
+        # Process only the first object
+        mask_info = individual_masks[0]
+        mask_url = mask_info.get("url")
+        if not mask_url:
+             raise HTTPException(status_code=500, detail="Invalid mask URL")
             
-            # Download mask
-            mask_pil = download_image(mask_url)
-            if mask_pil is None:
-                print(f"Failed to download mask for object {i}")
-                continue
-                
-            mask_np = np.array(mask_pil)
+        # Download mask
+        mask_pil = await loop.run_in_executor(executor, download_image, mask_url)
+        if mask_pil is None:
+             raise HTTPException(status_code=500, detail="Failed to download mask")
             
-            # Run inference
-            try:
-                output = reconstruct_object(str(input_image_path), mask_np)
-                
-                # Save GLB
-                glb = output.get("glb")
-                if glb is not None:
-                    output_filename = f"object_{i}.glb"
-                    output_path = results_dir / output_filename
-                    glb.export(str(output_path))
-                else:
-                    print(f"Warning: No GLB generated for object {i}")
-                    
-            except Exception as e:
-                print(f"Error processing object {i}: {e}")
-                continue
+        mask_np = np.array(mask_pil)
+        
+        # Run inference
+        # Only generating PLY, so no mesh postprocess needed
+        output = await loop.run_in_executor(
+            executor,
+            reconstruct_object,
+            str(input_image_path), 
+            mask_np, 
+            42, # seed
+            False, # with_mesh_postprocess
+            False, # with_texture_baking
+        )
+        
+        # Save PLY (Gaussian Splat)
+        gs = output.get("gs")
+        if gs is None:
+            raise HTTPException(status_code=500, detail="Failed to generate Gaussian Splat")
 
-        # Zip results
-        zip_filename = "reconstruction_results.zip"
-        zip_path = temp_path / zip_filename
-        
-        with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for file in results_dir.glob("*.glb"):
-                zipf.write(file, arcname=file.name)
-                
-        if not zip_path.exists() or zip_path.stat().st_size == 0:
-             raise HTTPException(status_code=500, detail="Failed to generate any 3D models")
+        output_filename = "reconstruction.ply"
+        output_path = temp_path / output_filename
+        gs.save_ply(str(output_path))
 
         return FileResponse(
-            path=zip_path,
-            filename=zip_filename,
-            media_type="application/zip"
+            path=output_path,
+            filename=output_filename,
+            media_type="application/octet-stream"
         )
         
     except HTTPException as he:

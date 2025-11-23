@@ -53,7 +53,13 @@ def get_model():
             
     return inference_model
 
-def reconstruct_object(image_path: str, mask_np: np.ndarray, seed: int = 42):
+def reconstruct_object(
+    image_path: str, 
+    mask_np: np.ndarray, 
+    seed: int = 42,
+    with_mesh_postprocess: bool = True,
+    with_texture_baking: bool = True,
+):
     """
     Runs the 3D reconstruction on a single object.
     """
@@ -71,8 +77,8 @@ def reconstruct_object(image_path: str, mask_np: np.ndarray, seed: int = 42):
             loaded_image, 
             mask_np, 
             seed=seed, 
-            with_mesh_postprocess=True, 
-            with_texture_baking=True
+            with_mesh_postprocess=with_mesh_postprocess, 
+            with_texture_baking=with_texture_baking,
         )
         return output
     except Exception as e:
