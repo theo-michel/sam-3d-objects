@@ -6,8 +6,10 @@ import os
 from typing import Optional
 import numpy as np
 from PIL import Image
-from services.segmentation import upload_image_to_fal
-from services.segmentation_yolo import segment_image_with_yolo
+from utils import upload_image_to_fal as upload_image_to_fal
+from services.segmentation_yolo import (
+    segment_image_with_yolo as segment_image_with_yolo,
+)
 from services.reconstruction import reconstruct_object
 
 

@@ -6,6 +6,7 @@ from PIL import Image
 import torch
 import numpy as np
 
+
 def get_bbox_from_mask(mask: torch.Tensor) -> tuple[int, int, int, int]:
     """
     Compute the tight bounding box around white (non-zero) pixels in the mask.
@@ -31,12 +32,15 @@ def get_bbox_from_mask(mask: torch.Tensor) -> tuple[int, int, int, int]:
     width = x_max - x_min + 1
     return (x, y, height, width)
 
+
 def segment_image(image_url: str, prompt: str = "Pickable object") -> dict:
     """
     Segments an image using SAM3 via fal.ai with text prompt.
     """
     if not os.environ.get("FAL_KEY"):
-        raise HTTPException(status_code=500, detail="FAL_KEY environment variable not set")
+        raise HTTPException(
+            status_code=500, detail="FAL_KEY environment variable not set"
+        )
 
     print(f"Running SAM3 segmentation with prompt '{prompt}'...")
     try:
@@ -48,21 +52,10 @@ def segment_image(image_url: str, prompt: str = "Pickable object") -> dict:
                 "include_scores": True,
                 "include_boxes": True,
                 "return_multiple_masks": True,
-                "max_masks": 10
-            }
+                "max_masks": 10,
+            },
         )
         return segmentation_result
     except Exception as e:
         print(f"Error during segmentation: {e}")
         raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
-
-def upload_image_to_fal(image_path: str) -> str:
-    """
-    Uploads an image to fal.ai and returns the URL.
-    """
-    print("Uploading image to fal.ai...")
-    try:
-        return fal_client.upload_file(image_path)
-    except Exception as e:
-        print(f"Error uploading image: {e}")
-        raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")

@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import json
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -14,22 +15,28 @@ from services.image_to_3d import image_to_3d
 from utils import resize_image_if_needed, zip_files, save_reconstructed_objects
 
 
-app = FastAPI(title="SAM 3D Objects API")
-
 # ThreadPoolExecutor for blocking IO/CPU tasks
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     print("Warming up model...")
-    # Run in executor to avoid blocking startup
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(executor, get_model)
         print("Model loaded successfully.")
     except Exception as e:
         print(f"Failed to load model on startup: {e}")
+
+    yield
+
+    # Shutdown (if needed in the future)
+    pass
+
+
+app = FastAPI(title="SAM 3D Objects API", lifespan=lifespan)
 
 
 @app.post("/image-to-3d")

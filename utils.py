@@ -3,6 +3,11 @@ import zipfile
 import requests
 import io
 from PIL import Image
+from fastapi import HTTPException
+import fal_client
+import dotenv
+
+dotenv.load_dotenv()
 
 
 def download_image(url: str) -> Image.Image:
@@ -56,31 +61,33 @@ def zip_files(files: list[str], zip_path: str) -> str:
     return zip_path
 
 
-def save_reconstructed_objects(objects: list[dict], output_dir: str) -> tuple[list[str], list[dict]]:
+def save_reconstructed_objects(
+    objects: list[dict], output_dir: str
+) -> tuple[list[str], list[dict]]:
     """
     Save reconstructed 3D objects as PLY files and generate transformation metadata.
-    
+
     Args:
         objects: List of reconstructed objects from image_to_3d
         output_dir: Directory to save PLY files
-        
+
     Returns:
         Tuple of (saved_files, transformations)
     """
     saved_files = []
     transformations = []
-    
+
     for obj in objects:
         gs = obj["gs"]
         class_name = obj["class_name"]
         idx = obj["index"]
-        
+
         # Save PLY
         output_filename = f"reconstruction_{class_name}_{idx}.ply"
         output_path = os.path.join(output_dir, output_filename)
         gs.save_ply(output_path)
         saved_files.append(output_path)
-        
+
         # Save transformation metadata
         transformations.append(
             {
@@ -92,5 +99,17 @@ def save_reconstructed_objects(objects: list[dict], output_dir: str) -> tuple[li
                 "class": class_name,
             }
         )
-    
+
     return saved_files, transformations
+
+
+def upload_image_to_fal(image_path: str) -> str:
+    """
+    Uploads an image to fal.ai and returns the URL.
+    """
+    print("Uploading image to fal.ai...")
+    try:
+        return fal_client.upload_file(image_path)
+    except Exception as e:
+        print(f"Error uploading image: {e}")
+        raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")
