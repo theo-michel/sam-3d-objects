@@ -1,3 +1,7 @@
 __pycache__
 .env
 images/robot-vacume-sample.jpg
+images/*
+*.pt
+*.pth
+mask*.png

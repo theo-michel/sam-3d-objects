@@ -31,33 +31,24 @@ def get_bbox_from_mask(mask: torch.Tensor) -> tuple[int, int, int, int]:
     width = x_max - x_min + 1
     return (x, y, height, width)
 
-generator = pipeline("mask-generation", model="facebook/sam2-hiera-large", device=0)
-def segment_img_local_sam2(image: Image.Image) -> tuple[list[torch.Tensor], list[tuple[int, int, int, int]]]:
+def segment_image(image_url: str, prompt: str = "Pickable object") -> dict:
     """
-    Segments an image using SAM2 locally.
-    Returns a tuple of lists: (masks, bounding boxes) : [torch.Tensor, tuple[int, int, int, int]]
-    
-    """
-    outputs = generator(image, points_per_batch=64)
-    return (outputs["masks"], [get_bbox_from_mask(mask) for mask in outputs["masks"]])
-
-def segment_image(image_url: str):
-    """
-    Segments an image using SAM2 via fal.ai.
+    Segments an image using SAM3 via fal.ai with text prompt.
     """
     if not os.environ.get("FAL_KEY"):
         raise HTTPException(status_code=500, detail="FAL_KEY environment variable not set")
 
-    print("Running SAM2 segmentation...")
+    print(f"Running SAM3 segmentation with prompt '{prompt}'...")
     try:
         segmentation_result = fal_client.subscribe(
-            "fal-ai/sam2/auto-segment",
+            "fal-ai/sam-3/image-rle",
             arguments={
                 "image_url": image_url,
-                "points_per_side": 64,
-                "pred_iou_thresh": 0.8,
-                "stability_score_thresh": 0.9,
-                "min_mask_region_area": 120,
+                "text_prompt": prompt,
+                "include_scores": True,
+                "include_boxes": True,
+                "return_multiple_masks": True,
+                "max_masks": 10
             }
         )
         return segmentation_result
