@@ -90,3 +90,5 @@ fastapi
 uvicorn
 python-multipart
 fal-client
+DracoPy
+zstandard

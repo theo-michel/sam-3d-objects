@@ -30,6 +30,9 @@ def segment_image_with_yolo(image_url: str, prompt: str = "Pickable object", loc
 
     print(f"Detecting objects with YOLOv12 (local)...")
     
+    # Track if we created the temp file (so we know whether to clean it up)
+    created_temp_file = False
+    
     # Download image for local YOLO processing if not provided
     if local_image_path is None:
         image = download_image(image_url)
@@ -40,6 +43,7 @@ def segment_image_with_yolo(image_url: str, prompt: str = "Pickable object", loc
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
             image.save(tmp.name)
             local_image_path = tmp.name
+            created_temp_file = True
     else:
         image = Image.open(local_image_path)
     
@@ -133,11 +137,7 @@ def segment_image_with_yolo(image_url: str, prompt: str = "Pickable object", loc
             print(f"Error segmenting object {i}: {e}")
             continue
     
-    # Clean up temp file if created
-    if local_image_path and local_image_path.startswith('/tmp'):
-        try:
-            os.unlink(local_image_path)
-        except:
-            pass
+    # Note: We don't delete the temp file here because it may still be needed by the caller
+    # (e.g., for 3D reconstruction). The caller (api.py) handles cleanup via background_tasks.
             
     return sam_results

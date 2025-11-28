@@ -5,3 +5,5 @@ images/*
 *.pt
 *.pth
 mask*.png
+# Debug outputs from API requests (saved locally for debugging)
+debug_outputs/

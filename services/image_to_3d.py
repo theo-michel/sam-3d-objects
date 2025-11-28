@@ -18,32 +18,42 @@ def decode_rle_to_mask(rle_string: str, height: int, width: int) -> np.ndarray:
     Decode RLE string to binary mask.
 
     Args:
-        rle_string: RLE encoded string
+        rle_string: RLE encoded string (space-separated format)
         height: Image height
         width: Image width
 
     Returns:
         Binary mask as numpy array
     """
-    # Try pycocotools first
-    try:
-        from pycocotools import mask as mask_util
-
-        rle_obj = {
-            "counts": rle_string
-            if isinstance(rle_string, bytes)
-            else rle_string.encode("utf-8"),
-            "size": [height, width],
-        }
-        return mask_util.decode(rle_obj)
-    except ImportError:
-        pass
-
-    # Fallback to manual decoding for space-separated format
-    if not isinstance(rle_string, str) or " " not in rle_string:
+    # Handle bytes input
+    if isinstance(rle_string, bytes):
+        try:
+            rle_string = rle_string.decode("utf-8")
+        except:
+            return np.zeros((height, width), dtype=np.uint8)
+    
+    # Handle list input (take first element)
+    if isinstance(rle_string, list):
+        if not rle_string:
+            return np.zeros((height, width), dtype=np.uint8)
+        rle_string = rle_string[0]
+    
+    # Ensure it's a string
+    if not isinstance(rle_string, str):
+        return np.zeros((height, width), dtype=np.uint8)
+    
+    # Check for space-separated format
+    if " " not in rle_string:
+        print(f"Warning: RLE string doesn't contain spaces, returning zero mask")
         return np.zeros((height, width), dtype=np.uint8)
 
-    counts = [int(x) for x in rle_string.split()]
+    # Parse space-separated RLE format
+    try:
+        counts = [int(x) for x in rle_string.split()]
+    except ValueError as e:
+        print(f"Warning: Failed to parse RLE string: {e}, returning zero mask")
+        return np.zeros((height, width), dtype=np.uint8)
+    
     mask = np.zeros(height * width, dtype=np.uint8)
 
     for i in range(0, len(counts), 2):
