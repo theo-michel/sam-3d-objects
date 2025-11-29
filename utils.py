@@ -99,11 +99,11 @@ def build_scene_glb(objects: list[dict], compress: bool = True) -> bytes:
             gs.save_ply(temp_ply)
             plydata = PlyData.read(temp_ply)
             
-            # Extract positions
+            # Extract positions (in local object space)
             x = np.asarray(plydata['vertex']['x'], dtype=np.float32)
             y = np.asarray(plydata['vertex']['y'], dtype=np.float32)
             z = np.asarray(plydata['vertex']['z'], dtype=np.float32)
-            positions = np.column_stack([x, y, z])
+            positions_local = np.column_stack([x, y, z])
             
             # Extract colors if available (use f_dc_0, f_dc_1, f_dc_2 for RGB)
             try:
@@ -119,6 +119,33 @@ def build_scene_glb(objects: list[dict], compress: bool = True) -> bytes:
         finally:
             if os.path.exists(temp_ply):
                 os.remove(temp_ply)
+        
+        # Transform points from local to world/scene space
+        # This matches the behavior of make_scene() in notebook/inference.py
+        quat = np.array(obj["rotation"], dtype=np.float32)  # [w, x, y, z]
+        translation = np.array(obj["translation"], dtype=np.float32)
+        scale = np.array(obj["scale"], dtype=np.float32)
+        
+        # Convert quaternion to rotation matrix
+        # Quaternion format is [w, x, y, z]
+        if len(quat) == 4:
+            w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+            rotation_matrix = np.array([
+                [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
+                [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+                [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)]
+            ], dtype=np.float32)
+        else:
+            # Fallback: assume it's already a 3x3 matrix flattened
+            rotation_matrix = np.array(quat, dtype=np.float32).reshape(3, 3)
+        
+        # Apply transformation: world_pos = scale * (R @ local_pos) + translation
+        # First scale, then rotate, then translate
+        scale_matrix = np.diag(scale)
+        positions_world = (positions_local @ scale_matrix.T @ rotation_matrix.T) + translation
+        
+        # Use the transformed positions
+        positions = positions_world
         
         # Calculate bounds
         pos_min = positions.min(axis=0).tolist()
@@ -191,39 +218,10 @@ def build_scene_glb(objects: list[dict], compress: bool = True) -> bytes:
             }]
         })
         
-        # Build transformation matrix from rotation (quaternion), translation, scale
-        quat = np.array(obj["rotation"], dtype=np.float32)  # [w, x, y, z] or [x, y, z, w]
-        translation = np.array(obj["translation"], dtype=np.float32)
-        scale = np.array(obj["scale"], dtype=np.float32)
-        
-        # Convert quaternion to rotation matrix
-        # Assuming quaternion format is [w, x, y, z]
-        if len(quat) == 4:
-            w, x, y, z = quat[0], quat[1], quat[2], quat[3]
-            rotation = np.array([
-                [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
-                [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
-                [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)]
-            ], dtype=np.float32)
-        else:
-            # Fallback: assume it's already a 3x3 matrix flattened
-            rotation = np.array(quat, dtype=np.float32).reshape(3, 3)
-        
-        # GLB uses column-major 4x4 matrix: T * R * S
-        scale_matrix = np.diag(scale)
-        
-        transform = np.eye(4, dtype=np.float32)
-        transform[:3, :3] = rotation @ scale_matrix
-        transform[:3, 3] = translation
-        
-        # Flatten column-major for GLB
-        matrix = transform.T.flatten().tolist()
-        
-        # Create node with transform
+        # Points are already in world space, so use identity matrix for the node
         nodes.append({
             "name": node_name,
-            "mesh": mesh_idx,
-            "matrix": matrix
+            "mesh": mesh_idx
         })
     
     # Build GLB structure
